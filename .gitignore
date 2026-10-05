@@ -1,0 +1,26 @@
+# Local helper (documentation-only repository)
+/hibob_attendance.py
+/local/
+
+# Authentication and browser captures
+.hibob_session*
+.env
+.env.*
+captures/
+curl*.txt
+Pasted*.txt
+
+# Personal attendance backups and exports
+backups/
+exports/
+.attendance-backups/
+.*.json
+*before-normalization*.json
+
+# Python and local editor files
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+.idea/
+.vscode/
