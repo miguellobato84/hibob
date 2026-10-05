@@ -12,7 +12,7 @@ The local `hibob_attendance.py` helper reads attendance only. Earlier entry corr
 4. Save the request locally under the ignored `captures/` directory. Give Codex its file path and the specific attendance operation you want. Prefer local input over pasting credentials into chat.
 5. Have Codex inspect the method, URL, and body, then extract the Cookie header value from `-b` / `--cookie` into `.hibob_session`. Keep the `hibob` cookie and only the additional application or Cloudflare cookies needed for access. Store the secret with permissions `0600`; never print it or include it in commits.
 6. Have Codex read current HiBob state, perform the explicitly requested operation, and read back the results.
-7. **Log out of HiBob when the task session is finished.** Remove `.hibob_session` and the credential capture when no longer needed. Future tasks require a fresh session.
+7. **Logging out of HiBob is the user's responsibility. Codex must not log out automatically.** The user should log out when the task session is finished and remove `.hibob_session` and the credential capture when no longer needed. Future tasks require a fresh session.
 
 A copied request may change data. Codex should inspect its operation before executing it. A JWT expiry date alone does not prove that the server still accepts the session.
 
@@ -141,4 +141,4 @@ Check timesheet lock state and editing rights before writing. Save original rows
 
 [BetterBob's client](https://github.com/kevinhufnagl/betterbob/blob/d2c466ec7f6a40c3c4aab7b2974aeccb2f501dc1/Packages/BetterBobShared/Sources/BetterBobShared/Services/BobClient.swift) is the reference for the report and full-day update routes. Its [endpoint notes](https://github.com/kevinhufnagl/betterbob/blob/d2c466ec7f6a40c3c4aab7b2974aeccb2f501dc1/Docs/endpoints.md) describe the private API. Codex can implement requests using cURL or Python's standard library; this repository does not include an executable client or install BetterBob.
 
-Commit documentation only. `.gitignore` excludes the local Python helper, sessions, credential captures, attendance backups/exports, environment files, and Python caches. Inspect staged files before pushing; never commit Cookie headers, session JWTs, personal attendance records, or backups. Log out of HiBob after each completed task session.
+Commit documentation only. `.gitignore` excludes the local Python helper, sessions, credential captures, attendance backups/exports, environment files, and Python caches. Inspect staged files before pushing; never commit Cookie headers, session JWTs, personal attendance records, or backups. Logout is the user's responsibility; Codex may remind the user but must not log out automatically.
