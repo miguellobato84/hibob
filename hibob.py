@@ -3,7 +3,7 @@
 
 Reads the authenticated cURL from the private curl.secret file, validates the
 session with HiBob, and reads attendance data. Filling attendance writes only
-dates that HiBob explicitly reports as pending.
+dates that HiBob explicitly reports as pending unless overwrite is requested.
 """
 
 from __future__ import annotations
@@ -279,15 +279,24 @@ def parse_args() -> argparse.Namespace:
         "--action",
         choices=("show", "show-projects", "fill-time-attendance"),
         default="show",
-        help="show attendance (default), list projects, or fill pending attendance days",
+        help="show attendance (default), list projects, or fill attendance days",
     )
     parser.add_argument(
         "--schedule",
         help='work intervals, e.g. "08:00 - 14:00, 15:00 - 17:00" or "8-14,15-17"',
     )
     parser.add_argument(
+        "--break-schedule",
+        help='break intervals, e.g. "14:00 - 15:00" or "14-15"',
+    )
+    parser.add_argument(
         "--project-id",
         help="attendance project ID (required when filling attendance)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace existing attendance entries throughout the selected month",
     )
     args = parser.parse_args()
     if args.action == "fill-time-attendance":
@@ -297,23 +306,28 @@ def parse_args() -> argparse.Namespace:
             parser.error("--project-id is required with --action fill-time-attendance")
         try:
             args.intervals = parse_intervals(args.schedule)
+            args.break_intervals = (
+                parse_intervals(args.break_schedule, "--break-schedule")
+                if args.break_schedule is not None
+                else []
+            )
         except InputError as exc:
             parser.error(str(exc))
-    elif args.schedule is not None or args.project_id is not None:
-        parser.error("--schedule and --project-id can only be used with --action fill-time-attendance")
+    elif args.schedule is not None or args.break_schedule is not None or args.project_id is not None or args.overwrite:
+        parser.error("--schedule, --break-schedule, --project-id, and --overwrite can only be used with --action fill-time-attendance")
     return args
 
 
-def parse_intervals(value: str) -> list[tuple[str, str]]:
+def parse_intervals(value: str, option_name: str = "--schedule") -> list[tuple[str, str]]:
     """Parse comma-separated 24-hour intervals, accepting optional minutes."""
     if not value.strip():
-        raise InputError("--schedule must contain at least one interval, such as '8-14,15-17'.")
+        raise InputError(f"{option_name} must contain at least one interval, such as '8-14,15-17'.")
     intervals: list[tuple[int, int, str, str]] = []
     for part in value.split(","):
         match = TIME_INTERVAL_PATTERN.fullmatch(part)
         if not match:
             raise InputError(
-                f"Invalid interval {part.strip()!r}. Use HH:MM - HH:MM or H-H, "
+                f"Invalid interval {part.strip()!r} in {option_name}. Use HH:MM - HH:MM or H-H, "
                 "for example '08:00 - 14:00, 15:00 - 17:00' or '8-14,15-17'."
             )
         start_hour, start_minute, end_hour, end_minute = match.groups()
@@ -521,8 +535,9 @@ def create_backup(year: int, month: int, rows: dict[date, dict], targets: list[d
     return backup_path
 
 
-def attendance_payload(target: date, intervals: list[tuple[str, str]], project_id, offset: int) -> list[dict]:
-    return [
+def attendance_payload(target: date, intervals: list[tuple[str, str]], project_id, offset: int,
+                       break_intervals: list[tuple[str, str]] | None = None) -> list[dict]:
+    payload = [
         {
             "start": f"{target.isoformat()}T{start}",
             "end": f"{target.isoformat()}T{end}",
@@ -535,6 +550,18 @@ def attendance_payload(target: date, intervals: list[tuple[str, str]], project_i
         }
         for start, end in intervals
     ]
+    payload.extend(
+        {
+            "id": None,
+            "start": f"{target.isoformat()}T{start}",
+            "end": f"{target.isoformat()}T{end}",
+            "entryType": "break",
+            "reportingMethod": "startEnd",
+            "offset": offset,
+        }
+        for start, end in (break_intervals or [])
+    )
+    return payload
 
 
 def date_offset(target: date) -> int:
@@ -545,12 +572,22 @@ def date_offset(target: date) -> int:
     return -int(utc_offset.total_seconds() // 60)
 
 
-def matches_intervals(row: dict | None, intervals: list[tuple[str, str]], project_id) -> bool:
+def matches_intervals(row: dict | None, intervals: list[tuple[str, str]], project_id,
+                      break_intervals: list[tuple[str, str]] | None = None) -> bool:
     if not row or not isinstance(row.get("entries"), list):
         return False
     actual = []
+    actual_breaks = []
     for entry in row["entries"]:
-        if not isinstance(entry, dict) or str(entry.get("entryType", "work")).casefold() in {"break", "rest"}:
+        if not isinstance(entry, dict):
+            continue
+        entry_type = str(entry.get("entryType", "work")).casefold()
+        if entry_type in {"break", "rest"}:
+            if entry_type == "break":
+                start, end = entry.get("start"), entry.get("end")
+                if not isinstance(start, str) or not isinstance(end, str):
+                    return False
+                actual_breaks.append((start[-5:], end[-5:]))
             continue
         start, end = entry.get("start"), entry.get("end")
         if not isinstance(start, str) or not isinstance(end, str):
@@ -562,11 +599,13 @@ def matches_intervals(row: dict | None, intervals: list[tuple[str, str]], projec
         if str(actual_project_id) != str(project_id):
             return False
         actual.append((start[-5:], end[-5:]))
-    return actual == intervals
+    return actual == intervals and actual_breaks == (break_intervals or [])
 
 
 def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
-               intervals: list[tuple[str, str]], requested_project_id: str) -> dict[date, dict]:
+               intervals: list[tuple[str, str]], requested_project_id: str,
+               overwrite: bool = False,
+               break_intervals: list[tuple[str, str]] | None = None) -> dict[date, dict]:
     cycles = report_cycles(opener, request_headers, employee_id, year, month)
     rows = month_rows(opener, request_headers, employee_id, year, month)
     projects = fetch_projects(opener, request_headers, employee_id)
@@ -580,38 +619,49 @@ def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
         if date(year, month, number) <= yesterday
     ]
     pending = [day for day in days if day_status(day, rows.get(day))[0] == "PENDING"]
-    if not pending:
-        print(f"No pending attendance days through yesterday for {project_name}; no entries written.")
+    if overwrite:
+        # Existing entries anywhere in the selected month are replaced. Pending
+        # workdays through yesterday are filled as well, matching normal fill.
+        month_days = [date(year, month, number) for number in range(1, calendar.monthrange(year, month)[1] + 1)]
+        targets = [day for day in month_days if day_status(day, rows.get(day))[0] == "FILLED"]
+        targets.extend(pending)
+        targets = sorted(set(targets))
+    else:
+        targets = pending
+    if not targets:
+        message = "attendance entries to overwrite" if overwrite else "pending attendance days through yesterday"
+        print(f"No {message} for {project_name}; no entries written.")
         return rows
 
     # Validate every target before the first write to avoid a partial fill when
     # the selected timesheet is locked or its state is unknown.
-    target_cycles = {day: cycle_for_date(cycles, day) for day in pending}
+    target_cycles = {day: cycle_for_date(cycles, day) for day in targets}
     for day, cycle in target_cycles.items():
         ensure_cycle_editable(cycle, day)
 
     print(f"Using project: {project_name} (ID: {project_id})")
-    backup_path = create_backup(year, month, rows, pending)
+    backup_path = create_backup(year, month, rows, targets)
     print(f"Backup saved: {backup_path}")
 
-    for target in pending:
-        # Re-read immediately before each full-list update so an entry added
-        # since the initial report is preserved rather than overwritten.
+    for target in targets:
+        # Re-read immediately before each full-list update to avoid acting on
+        # stale status and entries.
         latest_rows = month_rows(opener, request_headers, employee_id, year, month)
         latest = latest_rows.get(target)
         status, _detail = day_status(target, latest)
-        if status != "PENDING":
+        allowed_statuses = {"PENDING", "FILLED"} if overwrite else {"PENDING"}
+        if status not in allowed_statuses:
             print(f"Skipped {target.isoformat()}: status changed to {status}.")
             rows = latest_rows
             continue
         existing = latest.get("entries") if isinstance(latest, dict) else None
-        if existing:
+        if existing and not overwrite:
             print(f"Skipped {target.isoformat()}: entries appeared before the update.")
             rows = latest_rows
             continue
 
         offset = date_offset(target)
-        payload = attendance_payload(target, intervals, project_id, offset)
+        payload = attendance_payload(target, intervals, project_id, offset, break_intervals)
         request_json(
             opener,
             request_headers,
@@ -619,13 +669,17 @@ def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
             body=payload,
         )
         rows = month_rows(opener, request_headers, employee_id, year, month)
-        if not matches_intervals(rows.get(target), intervals, project_id):
+        if not matches_intervals(rows.get(target), intervals, project_id, break_intervals):
             raise RuntimeError(
-                f"HiBob did not verify the requested intervals and project for "
+                f"HiBob did not verify the requested work/break intervals and project for "
                 f"{target.isoformat()}; stopped before writing additional dates."
             )
+        break_summary = (
+            f"; breaks {', '.join(f'{start}-{end}' for start, end in break_intervals)}"
+            if break_intervals else ""
+        )
         print(f"Filled and verified {target.isoformat()} on {project_name} "
-              f"({', '.join(f'{start}-{end}' for start, end in intervals)}).")
+              f"({', '.join(f'{start}-{end}' for start, end in intervals)}{break_summary}).")
     return rows
 
 
@@ -651,6 +705,8 @@ def main() -> int:
                 month,
                 args.intervals,
                 args.project_id,
+                args.overwrite,
+                args.break_intervals,
             )
             render_table(rows, year, month)
         else:

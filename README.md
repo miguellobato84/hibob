@@ -33,8 +33,14 @@ python3 hibob.py --action show-projects
 # Fill pending days through yesterday with split intervals
 python3 hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "08:00 - 14:00, 15:00 - 17:00"
 
+# Add a break interval between work intervals
+python3 hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "8-14,15-17" --break-schedule "14-15"
+
 # The shorter hour-only form is also accepted
 python3 hibob.py --action fill-time-attendance --month 10 --project-id PROJECT_ID --schedule "8-14,15-17"
+
+# Replace existing attendance entries in the selected month
+python3 hibob.py --action fill-time-attendance --month 10 --project-id PROJECT_ID --schedule "8-14,15-17" --overwrite
 ```
 
 Replace `PROJECT_ID` with an ID shown by `--action show-projects`.
@@ -45,17 +51,21 @@ The attendance table shows each date as `FILLED`, `PENDING`, `NON-WORKING`, or `
 
 ## Filling attendance
 
-`--schedule` takes comma-separated 24-hour work intervals. Enter each as `HH:MM - HH:MM` or as `H-H` with omitted minutes treated as `:00`. For example, `08:00 - 14:00, 15:00 - 17:00` and `8-14,15-17` mean the same thing. Each interval must end after it starts, and intervals cannot overlap. Overnight intervals are not supported.
+`--schedule` takes comma-separated 24-hour work intervals. Enter each as `HH:MM - HH:MM` or as `H-H` with omitted minutes treated as `:00`. For example, `08:00 - 14:00, 15:00 - 17:00` and `8-14,15-17` mean the same thing. `--break-schedule` takes break intervals in the same format and uses the same validation. Example: `--schedule "8-14,15-17" --break-schedule "14-15"`. Each interval must end after it starts, intervals within a schedule cannot overlap, and overnight intervals are not supported.
 
 The fill action:
 
 - Requires `--project-id`; it has no default. The ID must match a project returned by HiBob for the signed-in employee.
+- Accepts optional `--break-schedule`; each interval is submitted as an `entryType: "break"` entry with no project ID.
 - Writes only dates through yesterday that HiBob reports as `PENDING` in the selected month.
-- Skips dates already filled, weekends, holidays, time off, dates without a report row, today, and future dates.
+- With `--overwrite`, replaces existing attendance entries on every filled date in the selected month and also fills pending dates through yesterday.
+- In the default mode, skips dates already filled, weekends, holidays, time off, dates without a report row, today, and future dates.
 - Checks that the timesheet is open before writing.
 - Saves a private backup under the ignored `backups/` directory, rereads each date before updating it, and reads attendance back to verify the intervals and project.
 
-This action writes attendance to HiBob. If a request fails partway through, rerunning it skips dates that are already filled.
+This action writes attendance to HiBob. In the default mode, if a request fails partway through, rerunning it skips dates that are already filled.
+
+`--overwrite` is restricted to `--action fill-time-attendance`. It replaces each target date's full entry list with the requested schedule and project. Existing entries later in the selected month are included; pending dates are still filled only through yesterday. A backup of every target day's prior row is saved before writing.
 
 ## API reference
 

@@ -13,8 +13,10 @@ Purpose descriptions summarize endpoint names and response fields. Request and r
 | `GET` | `/api/attendance/employees/{employeeId}/projects` |
 | `GET` | `/api/attendance/employees/{employeeId}/settings/` |
 | `GET` | `/api/attendance/employees/{employeeId}/timesheets` |
+| `GET` | `/api/attendance/employees/{employeeId}/timesheets/{date}/history` |
 | `GET` | `/api/attendance/employees/{employeeId}/timesheets/{timesheetId}/summary` |
 | `GET` | `/api/attendance/my/clockStatus` |
+| `POST` | `/api/attendance/employees/{employeeId}/attendance/entries` |
 | `GET` | `/api/branding/` |
 | `GET` | `/api/branding/login` |
 | `GET` | `/api/company` |
@@ -56,6 +58,7 @@ Purpose descriptions summarize endpoint names and response fields. Request and r
 | `GET` | `/api/user/prefs/colors-state_1.1` |
 | `GET` | `/api/user/prefs/isDemoDataPopFold` |
 | `GET` | `/api/user/prefs/time_attendance_employee_timesheet` |
+| `PUT` | `/api/user/prefs/time_attendance_employee_timesheet` |
 | `HEAD` | `/api/assessment-layer/permissions/can-view-my-career` |
 | `HEAD` | `/api/attendance/canViewPeoplesAttendance` |
 | `HEAD` | `/api/attendance/hasPersonalAttendance` |
@@ -311,6 +314,73 @@ None.
 | $.employeeTimesheets[].timesheetState.locked | boolean |
 | $.employeeTimesheets[].timesheetState.timeSheetStatus | string |
 
+### `GET /api/attendance/employees/{employeeId}/timesheets/{date}/history`
+
+### Purpose
+
+Returns the audit history for an employee's attendance on one date. The captured response included an `editedEntries` event from the web UI, with actor, timestamp, entry details, and nested subitems.
+
+### Request
+
+#### Path parameters
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `employeeId` | string | Employee identifier. |
+| `date` | string | Attendance date in `YYYY-MM-DD` form. |
+
+#### Query parameters
+
+None.
+
+#### Headers
+
+`accept`, `accept-language`, `bob-timezoneoffset`, `content-type`, `datatype`, `referer`, `x-requested-with`
+
+#### Body
+
+None.
+
+### Response
+
+#### Body
+
+**Media type:** application/json.
+
+**Body schema**
+
+| Field path | Type |
+| --- | --- |
+| $ | object |
+| $.date | string |
+| $.events | array |
+| $.events[] | object |
+| $.events[].type | string |
+| $.events[].actor | object |
+| $.events[].actor.employeeId | string |
+| $.events[].actor.displayName | string |
+| $.events[].actor.isImpersonated | boolean |
+| $.events[].source | string |
+| $.events[].timestamp | integer |
+| $.events[].details | object |
+| $.events[].details.clockIn | string |
+| $.events[].details.clockOut | string |
+| $.events[].details.entryDuration | string |
+| $.events[].details.projectId | integer |
+| $.events[].details.projectName | string |
+| $.events[].subItems | array |
+| $.events[].subItems[] | object |
+| $.events[].subItems[].type | string |
+| $.events[].subItems[].isDeleted | boolean |
+| $.events[].subItems[].details | object |
+| $.events[].subItems[].details.clockIn | string |
+| $.events[].subItems[].details.clockOut | string |
+| $.events[].subItems[].details.entryDuration | string |
+| $.events[].subItems[].details.projectId | integer |
+| $.events[].subItems[].details.projectName | string |
+
+The captured event used `type: "editedEntries"` and `source: "web"`. These are observed values, not an exhaustive enum.
+
 ### `GET /api/attendance/employees/{employeeId}/timesheets/{timesheetId}/summary`
 
 ### Purpose
@@ -405,6 +475,65 @@ None.
 | $.hasPendingTimeOffRequests | boolean |
 | $.isAutoSubmitTimesheet | boolean |
 | $.isSubmittable | boolean |
+
+### `POST /api/attendance/employees/{employeeId}/attendance/entries`
+
+### Purpose
+
+Submits attendance entries for one employee and date. The captured request sent work entries and a break entry together in one JSON array. The capture does not establish whether the server merges or replaces entries, so callers should follow the UI's submitted-list format.
+
+### Request
+
+#### Path parameters
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `employeeId` | string | Employee identifier. |
+
+#### Query parameters
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `forDate` | string | Attendance date in `YYYY-MM-DD` form. |
+
+#### Headers
+
+`accept`, `accept-language`, `bob-timezoneoffset`, `content-type`, `datatype`, `origin`, `referer`, `x-requested-with`
+
+#### Body
+
+**Media type:** application/json.
+
+An array of entries. Observed work entries contain an existing numeric `id`, `projectId`, `reason`, and `comment`. The break entry had `id: null` and omitted `projectId`, `reason`, and `comment`.
+
+| Field path | Type | Notes |
+| --- | --- | --- |
+| $ | array |
+| $[] | object |
+| $[].id | integer / null | Existing work entries carried an ID; the new break used `null`. |
+| $[].start | string | Local date-time in `YYYY-MM-DDTHH:MM` form. |
+| $[].end | string | Local date-time in `YYYY-MM-DDTHH:MM` form. |
+| $[].entryType | string | Captured values: `work` and `break`. |
+| $[].reportingMethod | string | Captured value: `startEnd`. |
+| $[].offset | integer | Time-zone offset in minutes. |
+| $[].projectId | integer | Present on work entries; absent on the captured break. |
+| $[].reason | null | Present on captured work entries; absent on the break. |
+| $[].comment | null | Present on captured work entries; absent on the break. |
+
+For a break, the captured shape was:
+
+```json
+{
+  "id": null,
+  "start": "YYYY-MM-DDTHH:MM",
+  "end": "YYYY-MM-DDTHH:MM",
+  "entryType": "break",
+  "reportingMethod": "startEnd",
+  "offset": 0
+}
+```
+
+The example uses a placeholder offset. Use the offset applicable to the attendance date. The capture's successful response was HTTP 200 with an empty body (`text/plain`).
 
 ### `GET /api/attendance/my/clockStatus`
 
@@ -2241,6 +2370,36 @@ None.
 | $.pagerConfig.sliceSize | integer |
 | $.pagerConfig.sliceStep | integer |
 | $.type | string |
+
+### `PUT /api/user/prefs/time_attendance_employee_timesheet`
+
+### Purpose
+
+Saves the current user's employee-timesheet report preferences. This request appeared in the same capture as the break edit; it updates report configuration and is separate from submitting attendance entries.
+
+### Request
+
+#### Query parameters
+
+None.
+
+#### Headers
+
+`accept`, `accept-language`, `bob-timezoneoffset`, `content-type`, `datatype`, `origin`, `referer`, `x-requested-with`
+
+#### Body
+
+**Media type:** application/json.
+
+The captured body has the same field structure as the response documented for `GET /api/user/prefs/time_attendance_employee_timesheet`.
+
+### Response
+
+#### Body
+
+**Media type:** application/json.
+
+The captured response returned the saved preference object, with the same field structure as the `GET` response.
 
 ### `HEAD /api/assessment-layer/permissions/can-view-my-career`
 
