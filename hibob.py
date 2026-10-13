@@ -42,7 +42,6 @@ REQUIRED_REPORT_FIELDS = (
     "timeOff",
     "timeOffEntries",
 )
-ATTENDANCE_PROJECT_NAME = "Teleworking"
 TIME_INTERVAL_PATTERN = re.compile(r"^\s*(\d{1,2})(?::([0-5]\d))?\s*-\s*(\d{1,2})(?::([0-5]\d))?\s*$")
 
 
@@ -283,26 +282,32 @@ def parse_args() -> argparse.Namespace:
         help="show attendance (default), list projects, or fill pending attendance days",
     )
     parser.add_argument(
-        "--value",
+        "--schedule",
         help='work intervals, e.g. "08:00 - 14:00, 15:00 - 17:00" or "8-14,15-17"',
+    )
+    parser.add_argument(
+        "--project-id",
+        help="attendance project ID (required when filling attendance)",
     )
     args = parser.parse_args()
     if args.action == "fill-time-attendance":
-        if args.value is None:
-            parser.error("--value is required with --action fill-time-attendance")
+        if args.schedule is None:
+            parser.error("--schedule is required with --action fill-time-attendance")
+        if args.project_id is None:
+            parser.error("--project-id is required with --action fill-time-attendance")
         try:
-            args.intervals = parse_intervals(args.value)
+            args.intervals = parse_intervals(args.schedule)
         except InputError as exc:
             parser.error(str(exc))
-    elif args.value is not None:
-        parser.error("--value can only be used with --action fill-time-attendance")
+    elif args.schedule is not None or args.project_id is not None:
+        parser.error("--schedule and --project-id can only be used with --action fill-time-attendance")
     return args
 
 
 def parse_intervals(value: str) -> list[tuple[str, str]]:
     """Parse comma-separated 24-hour intervals, accepting optional minutes."""
     if not value.strip():
-        raise InputError("--value must contain at least one interval, such as '8-14,15-17'.")
+        raise InputError("--schedule must contain at least one interval, such as '8-14,15-17'.")
     intervals: list[tuple[int, int, str, str]] = []
     for part in value.split(","):
         match = TIME_INTERVAL_PATTERN.fullmatch(part)
@@ -466,16 +471,11 @@ def render_projects(projects: list[dict]) -> None:
         print(" | ".join(record[i].ljust(widths[i]) for i in range(len(columns))))
 
 
-def find_teleworking_project(projects: list[dict]) -> dict:
-    matches = [
-        project for project in projects
-        if str(project.get("name", "")).strip().casefold() == ATTENDANCE_PROJECT_NAME.casefold()
-    ]
-    if len(matches) != 1 or matches[0].get("id") in (None, ""):
-        raise RuntimeError(
-            f"Expected one available {ATTENDANCE_PROJECT_NAME} project, found {len(matches)}."
-        )
-    return matches[0]
+def find_project(projects: list[dict], project_id: str) -> dict:
+    for project in projects:
+        if str(project.get("id", "")) == project_id:
+            return project
+    raise RuntimeError(f"Project ID {project_id!r} is not available for this employee.")
 
 
 def cycle_for_date(cycles: list[dict], target: date) -> dict:
@@ -566,9 +566,13 @@ def matches_intervals(row: dict | None, intervals: list[tuple[str, str]], projec
 
 
 def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
-               intervals: list[tuple[str, str]]) -> dict[date, dict]:
+               intervals: list[tuple[str, str]], requested_project_id: str) -> dict[date, dict]:
     cycles = report_cycles(opener, request_headers, employee_id, year, month)
     rows = month_rows(opener, request_headers, employee_id, year, month)
+    projects = fetch_projects(opener, request_headers, employee_id)
+    project = find_project(projects, requested_project_id)
+    project_id = project["id"]
+    project_name = str(project.get("name") or "(unnamed)")
     yesterday = datetime.now(TIMEZONE).date() - timedelta(days=1)
     days = [
         date(year, month, number)
@@ -577,7 +581,7 @@ def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
     ]
     pending = [day for day in days if day_status(day, rows.get(day))[0] == "PENDING"]
     if not pending:
-        print("No pending attendance days through yesterday; no entries written.")
+        print(f"No pending attendance days through yesterday for {project_name}; no entries written.")
         return rows
 
     # Validate every target before the first write to avoid a partial fill when
@@ -586,9 +590,7 @@ def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
     for day, cycle in target_cycles.items():
         ensure_cycle_editable(cycle, day)
 
-    projects = fetch_projects(opener, request_headers, employee_id)
-    project = find_teleworking_project(projects)
-    project_id = project["id"]
+    print(f"Using project: {project_name} (ID: {project_id})")
     backup_path = create_backup(year, month, rows, pending)
     print(f"Backup saved: {backup_path}")
 
@@ -619,10 +621,11 @@ def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
         rows = month_rows(opener, request_headers, employee_id, year, month)
         if not matches_intervals(rows.get(target), intervals, project_id):
             raise RuntimeError(
-                f"HiBob did not verify the requested intervals and Teleworking project for "
+                f"HiBob did not verify the requested intervals and project for "
                 f"{target.isoformat()}; stopped before writing additional dates."
             )
-        print(f"Filled and verified {target.isoformat()} ({', '.join(f'{start}-{end}' for start, end in intervals)}).")
+        print(f"Filled and verified {target.isoformat()} on {project_name} "
+              f"({', '.join(f'{start}-{end}' for start, end in intervals)}).")
     return rows
 
 
@@ -640,7 +643,15 @@ def main() -> int:
         elif args.action == "fill-time-attendance":
             default_year, default_number = default_month(today)
             year, month = default_year, args.month if args.month is not None else default_number
-            rows = fill_month(opener, request_headers, employee_id, year, month, args.intervals)
+            rows = fill_month(
+                opener,
+                request_headers,
+                employee_id,
+                year,
+                month,
+                args.intervals,
+                args.project_id,
+            )
             render_table(rows, year, month)
         else:
             default_year, default_number = default_month(today)

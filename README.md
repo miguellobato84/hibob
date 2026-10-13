@@ -31,11 +31,13 @@ python3 hibob.py --month 10
 python3 hibob.py --action show-projects
 
 # Fill pending days through yesterday with split intervals
-python3 hibob.py --action fill-time-attendance --value "08:00 - 14:00, 15:00 - 17:00"
+python3 hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "08:00 - 14:00, 15:00 - 17:00"
 
 # The shorter hour-only form is also accepted
-python3 hibob.py --action fill-time-attendance --month 10 --value "8-14,15-17"
+python3 hibob.py --action fill-time-attendance --month 10 --project-id PROJECT_ID --schedule "8-14,15-17"
 ```
+
+Replace `PROJECT_ID` with an ID shown by `--action show-projects`.
 
 `--action show` is the default. If `--month` is omitted, the tool selects the previous month on days 1–5 and the current month on all other days. `--month` accepts a number from 1 to 12 and uses the current year.
 
@@ -43,11 +45,11 @@ The attendance table shows each date as `FILLED`, `PENDING`, `NON-WORKING`, or `
 
 ## Filling attendance
 
-`--value` takes comma-separated 24-hour work intervals. Enter each as `HH:MM - HH:MM` or as `H-H` with omitted minutes treated as `:00`. For example, `08:00 - 14:00, 15:00 - 17:00` and `8-14,15-17` mean the same thing. Each interval must end after it starts, and intervals cannot overlap. Overnight intervals are not supported.
+`--schedule` takes comma-separated 24-hour work intervals. Enter each as `HH:MM - HH:MM` or as `H-H` with omitted minutes treated as `:00`. For example, `08:00 - 14:00, 15:00 - 17:00` and `8-14,15-17` mean the same thing. Each interval must end after it starts, and intervals cannot overlap. Overnight intervals are not supported.
 
 The fill action:
 
-- Uses the **Teleworking** project resolved from HiBob's current project list.
+- Requires `--project-id`; it has no default. The ID must match a project returned by HiBob for the signed-in employee.
 - Writes only dates through yesterday that HiBob reports as `PENDING` in the selected month.
 - Skips dates already filled, weekends, holidays, time off, dates without a report row, today, and future dates.
 - Checks that the timesheet is open before writing.
