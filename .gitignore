@@ -1,12 +1,13 @@
-# Local helper (documentation-only repository)
-/hibob_attendance.py
+# Local-only attendance helper
 /local/
 
 # Authentication and browser captures
 .hibob_session*
+curl.secret
 .env
 .env.*
 captures/
+*.har
 curl*.txt
 Pasted*.txt
 
