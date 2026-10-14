@@ -1,0 +1,18 @@
+[project]
+name = "hibob-attendance-cli"
+version = "0.1.0"
+description = "Command-line tool for viewing and filling HiBob attendance"
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = ["ruff>=0.11"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

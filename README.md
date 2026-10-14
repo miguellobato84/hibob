@@ -5,8 +5,32 @@
 ## Requirements
 
 - Python 3.10 or newer.
+- [uv](https://docs.astral.sh/uv/) for environment and dependency management.
 - An active HiBob session with access to Attendance.
 - A successful Attendance XHR request copied from your browser as cURL.
+
+## Local setup
+
+Create the project environment and install development tools:
+
+```sh
+uv sync --group dev
+```
+
+Run the CLI with the project Python environment:
+
+```sh
+uv run python hibob.py
+```
+
+Run Ruff on the script:
+
+```sh
+uv run ruff check hibob.py
+```
+
+The project uses Python's standard library at runtime. `uv.lock` records the
+development tool versions for repeatable local setup.
 
 Save the cURL command as `curl.secret` in this repository's root and restrict access to your account:
 
@@ -35,25 +59,25 @@ Run these from the repository directory:
 
 ```sh
 # Show the attendance table for the default month
-python3 hibob.py
+uv run python hibob.py
 
 # Show a month number in the current year
-python3 hibob.py --month 10
+uv run python hibob.py --month 10
 
 # List attendance projects and their IDs
-python3 hibob.py --action show-projects
+uv run python hibob.py --action show-projects
 
 # Fill pending days through yesterday with split intervals
-python3 hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "08:00 - 14:00, 15:00 - 17:00"
+uv run python hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "08:00 - 14:00, 15:00 - 17:00"
 
 # Add a break interval between work intervals
-python3 hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "8-14,15-17" --break-schedule "14-15"
+uv run python hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "8-14,15-17" --break-schedule "14-15"
 
 # The shorter hour-only form is also accepted
-python3 hibob.py --action fill-time-attendance --month 10 --project-id PROJECT_ID --schedule "8-14,15-17"
+uv run python hibob.py --action fill-time-attendance --month 10 --project-id PROJECT_ID --schedule "8-14,15-17"
 
 # Replace existing attendance entries in the selected month
-python3 hibob.py --action fill-time-attendance --month 10 --project-id PROJECT_ID --schedule "8-14,15-17" --overwrite
+uv run python hibob.py --action fill-time-attendance --month 10 --project-id PROJECT_ID --schedule "8-14,15-17" --overwrite
 ```
 
 Replace `PROJECT_ID` with an ID shown by `--action show-projects`.
