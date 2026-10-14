@@ -42,7 +42,9 @@ REQUIRED_REPORT_FIELDS = (
     "timeOff",
     "timeOffEntries",
 )
-TIME_INTERVAL_PATTERN = re.compile(r"^\s*(\d{1,2})(?::([0-5]\d))?\s*-\s*(\d{1,2})(?::([0-5]\d))?\s*$")
+TIME_INTERVAL_PATTERN = re.compile(
+    r"^\s*(\d{1,2})(?::([0-5]\d))?\s*-\s*(\d{1,2})(?::([0-5]\d))?\s*$"
+)
 
 
 class InputError(ValueError):
@@ -125,11 +127,15 @@ def parse_curl(content: str) -> tuple[dict[str, str], dict[str, str], str, int]:
     if "hibob" not in cookies:
         raise InputError("The cURL must include a HiBob 'hibob' session cookie.")
     if "bob-timezoneoffset" not in headers:
-        raise InputError("The cURL must include bob-timezoneoffset for attendance dates.")
+        raise InputError(
+            "The cURL must include bob-timezoneoffset for attendance dates."
+        )
     try:
         timezone_offset = int(headers["bob-timezoneoffset"])
     except ValueError:
-        raise InputError("bob-timezoneoffset must be an integer number of minutes.") from None
+        raise InputError(
+            "bob-timezoneoffset must be an integer number of minutes."
+        ) from None
 
     claims = decode_session_claims(cookies["hibob"])
     employee_id = str(claims.get("employeeId", ""))
@@ -137,7 +143,9 @@ def parse_curl(content: str) -> tuple[dict[str, str], dict[str, str], str, int]:
     if not employee_id.isdigit():
         raise InputError("The session cookie does not contain a numeric employee ID.")
     if not isinstance(expiry, (int, float)) or expiry <= time.time():
-        raise InputError("The session token is expired or has no valid expiry; capture a fresh cURL.")
+        raise InputError(
+            "The session token is expired or has no valid expiry; capture a fresh cURL."
+        )
     return headers, cookies, employee_id, timezone_offset
 
 
@@ -193,7 +201,9 @@ def cookie_jar(cookie_values: dict[str, str]) -> CookieJar:
 def build_client(headers: dict[str, str], cookies: dict[str, str]):
     request_headers = {
         "Accept": headers.get("accept", "application/json, text/plain, */*"),
-        "Referer": headers.get("referer", "https://app.hibob.com/attendance/my-attendance"),
+        "Referer": headers.get(
+            "referer", "https://app.hibob.com/attendance/my-attendance"
+        ),
         "User-Agent": headers.get("user-agent", "Mozilla/5.0"),
         "X-Requested-With": "XMLHttpRequest",
         "bob-timezoneoffset": headers["bob-timezoneoffset"],
@@ -213,7 +223,9 @@ def request_json(opener, request_headers, path: str, body: dict | list | None = 
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json;charset=UTF-8"
         method = "POST"
-    request = Request(f"{BASE_URL}/{path.lstrip('/')}", data=data, headers=headers, method=method)
+    request = Request(
+        f"{BASE_URL}/{path.lstrip('/')}", data=data, headers=headers, method=method
+    )
     try:
         with opener.open(request, timeout=30) as response:
             response_body = response.read()
@@ -233,7 +245,9 @@ def request_json(opener, request_headers, path: str, body: dict | list | None = 
     except URLError as exc:
         raise RuntimeError(f"Could not connect to HiBob: {exc.reason}") from None
     except (UnicodeError, json.JSONDecodeError):
-        raise RuntimeError("HiBob returned non-JSON data; the request may have redirected to login.") from None
+        raise RuntimeError(
+            "HiBob returned non-JSON data; the request may have redirected to login."
+        ) from None
 
 
 def validate_session(opener, request_headers, employee_id: str) -> None:
@@ -313,15 +327,26 @@ def parse_args() -> argparse.Namespace:
             )
         except InputError as exc:
             parser.error(str(exc))
-    elif args.schedule is not None or args.break_schedule is not None or args.project_id is not None or args.overwrite:
-        parser.error("--schedule, --break-schedule, --project-id, and --overwrite can only be used with --action fill-time-attendance")
+    elif (
+        args.schedule is not None
+        or args.break_schedule is not None
+        or args.project_id is not None
+        or args.overwrite
+    ):
+        parser.error(
+            "--schedule, --break-schedule, --project-id, and --overwrite can only be used with --action fill-time-attendance"
+        )
     return args
 
 
-def parse_intervals(value: str, option_name: str = "--schedule") -> list[tuple[str, str]]:
+def parse_intervals(
+    value: str, option_name: str = "--schedule"
+) -> list[tuple[str, str]]:
     """Parse comma-separated 24-hour intervals, accepting optional minutes."""
     if not value.strip():
-        raise InputError(f"{option_name} must contain at least one interval, such as '8-14,15-17'.")
+        raise InputError(
+            f"{option_name} must contain at least one interval, such as '8-14,15-17'."
+        )
     intervals: list[tuple[int, int, str, str]] = []
     for part in value.split(","):
         match = TIME_INTERVAL_PATTERN.fullmatch(part)
@@ -337,8 +362,17 @@ def parse_intervals(value: str, option_name: str = "--schedule") -> list[tuple[s
             raise InputError(f"Hours must be between 0 and 23: {part.strip()!r}.")
         start_total, end_total = start_h * 60 + start_m, end_h * 60 + end_m
         if start_total >= end_total:
-            raise InputError(f"Each interval must end after it starts: {part.strip()!r}.")
-        intervals.append((start_total, end_total, f"{start_h:02d}:{start_m:02d}", f"{end_h:02d}:{end_m:02d}"))
+            raise InputError(
+                f"Each interval must end after it starts: {part.strip()!r}."
+            )
+        intervals.append(
+            (
+                start_total,
+                end_total,
+                f"{start_h:02d}:{start_m:02d}",
+                f"{end_h:02d}:{end_m:02d}",
+            )
+        )
 
     intervals.sort()
     for previous, current in zip(intervals, intervals[1:]):
@@ -347,9 +381,15 @@ def parse_intervals(value: str, option_name: str = "--schedule") -> list[tuple[s
     return [(start, end) for _start, _end, start, end in intervals]
 
 
-def report_cycles(opener, request_headers, employee_id: str, year: int, month: int) -> list[dict]:
-    timesheets = request_json(opener, request_headers, f"attendance/employees/{employee_id}/timesheets")
-    cycles = timesheets.get("employeeTimesheets", []) if isinstance(timesheets, dict) else []
+def report_cycles(
+    opener, request_headers, employee_id: str, year: int, month: int
+) -> list[dict]:
+    timesheets = request_json(
+        opener, request_headers, f"attendance/employees/{employee_id}/timesheets"
+    )
+    cycles = (
+        timesheets.get("employeeTimesheets", []) if isinstance(timesheets, dict) else []
+    )
     last_day = calendar.monthrange(year, month)[1]
     month_start, month_end = date(year, month, 1), date(year, month, last_day)
     matching = []
@@ -362,22 +402,38 @@ def report_cycles(opener, request_headers, employee_id: str, year: int, month: i
         if cycle_start <= month_end and cycle_end >= month_start:
             matching.append(cycle)
     if not matching:
-        raise RuntimeError(f"HiBob returned no timesheet cycle covering {year:04d}-{month:02d}.")
+        raise RuntimeError(
+            f"HiBob returned no timesheet cycle covering {year:04d}-{month:02d}."
+        )
     return matching
 
 
-def month_rows(opener, request_headers, employee_id: str, year: int, month: int) -> dict[date, dict]:
-    prefs = request_json(opener, request_headers, "user/prefs/time_attendance_employee_timesheet")
-    configured = prefs.get("configuration", {}).get("fields", []) if isinstance(prefs, dict) else []
-    fields = list(dict.fromkeys(
-        [field for field in configured if isinstance(field, str)]
-        + [f"/{REPORT_TYPE}/{name}" for name in REQUIRED_REPORT_FIELDS]
-    ))
+def month_rows(
+    opener, request_headers, employee_id: str, year: int, month: int
+) -> dict[date, dict]:
+    prefs = request_json(
+        opener, request_headers, "user/prefs/time_attendance_employee_timesheet"
+    )
+    configured = (
+        prefs.get("configuration", {}).get("fields", [])
+        if isinstance(prefs, dict)
+        else []
+    )
+    fields = list(
+        dict.fromkeys(
+            [field for field in configured if isinstance(field, str)]
+            + [f"/{REPORT_TYPE}/{name}" for name in REQUIRED_REPORT_FIELDS]
+        )
+    )
     rows_by_date: dict[date, dict] = {}
     for cycle in report_cycles(opener, request_headers, employee_id, year, month):
         body = {
             "instructions": [
-                {"values": ["Active"], "operator": "text_equals", "fieldPath": "/internal/status"}
+                {
+                    "values": ["Active"],
+                    "operator": "text_equals",
+                    "fieldPath": "/internal/status",
+                }
             ],
             "sortBy": "/root/displayName",
             "fields": fields,
@@ -404,7 +460,9 @@ def month_rows(opener, request_headers, employee_id: str, year: int, month: int)
                 if isinstance(data, dict):
                     rows_by_date[target] = data
     if not rows_by_date:
-        raise RuntimeError("HiBob returned no daily attendance rows for the selected month.")
+        raise RuntimeError(
+            "HiBob returned no daily attendance rows for the selected month."
+        )
     return rows_by_date
 
 
@@ -416,7 +474,11 @@ def has_entries(row: dict) -> bool:
     if display:
         return True
     worked = str(row.get("hoursWorked") or "").strip().lower()
-    return bool(worked and not re.fullmatch(r"0+(?:h\s*0+m)?", worked) and worked not in {"0h 00m", "0:00"})
+    return bool(
+        worked
+        and not re.fullmatch(r"0+(?:h\s*0+m)?", worked)
+        and worked not in {"0h 00m", "0:00"}
+    )
 
 
 def has_time_off(row: dict) -> bool:
@@ -464,8 +526,13 @@ def render_table(rows: dict[date, dict], year: int, month: int) -> None:
     for day_num in range(1, calendar.monthrange(year, month)[1] + 1):
         target = date(year, month, day_num)
         status, detail = day_status(target, rows.get(target))
-        records.append((target.strftime("%Y-%m-%d"), target.strftime("%A"), status, detail))
-    widths = [max(len(columns[i]), *(len(row[i]) for row in records)) for i in range(len(columns))]
+        records.append(
+            (target.strftime("%Y-%m-%d"), target.strftime("%A"), status, detail)
+        )
+    widths = [
+        max(len(columns[i]), *(len(row[i]) for row in records))
+        for i in range(len(columns))
+    ]
     print(" | ".join(columns[i].ljust(widths[i]) for i in range(len(columns))))
     print("-+-".join("-" * width for width in widths))
     for record in records:
@@ -476,9 +543,14 @@ def render_projects(projects: list[dict]) -> None:
     columns = ("Project", "ID")
     records = [
         (str(project.get("name") or "(unnamed)"), str(project.get("id", "unknown")))
-        for project in sorted(projects, key=lambda item: str(item.get("name", "")).casefold())
+        for project in sorted(
+            projects, key=lambda item: str(item.get("name", "")).casefold()
+        )
     ]
-    widths = [max(len(columns[i]), *(len(row[i]) for row in records)) for i in range(len(columns))]
+    widths = [
+        max(len(columns[i]), *(len(row[i]) for row in records))
+        for i in range(len(columns))
+    ]
     print(" | ".join(columns[i].ljust(widths[i]) for i in range(len(columns))))
     print("-+-".join("-" * width for width in widths))
     for record in records:
@@ -507,7 +579,9 @@ def cycle_for_date(cycles: list[dict], target: date) -> dict:
 def ensure_cycle_editable(cycle: dict, target: date) -> None:
     state = cycle.get("timesheetState")
     if not isinstance(state, dict):
-        raise RuntimeError(f"HiBob did not provide an editable state for {target.isoformat()}; no entries written.")
+        raise RuntimeError(
+            f"HiBob did not provide an editable state for {target.isoformat()}; no entries written."
+        )
     status = str(state.get("timeSheetStatus", "")).casefold()
     if state.get("locked") is not False or status != "open":
         raise RuntimeError(
@@ -516,17 +590,16 @@ def ensure_cycle_editable(cycle: dict, target: date) -> None:
         )
 
 
-def create_backup(year: int, month: int, rows: dict[date, dict], targets: list[date]) -> Path:
+def create_backup(
+    year: int, month: int, rows: dict[date, dict], targets: list[date]
+) -> Path:
     backup_dir = CURL_FILE.parent / "backups"
     backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     stamp = datetime.now(TIMEZONE).strftime("%Y%m%d-%H%M%S")
     backup_path = backup_dir / f"{year:04d}-{month:02d}-before-fill-{stamp}.json"
     backup_content = {
         "month": f"{year:04d}-{month:02d}",
-        "dates": {
-            target.isoformat(): rows[target]
-            for target in targets
-        },
+        "dates": {target.isoformat(): rows[target] for target in targets},
     }
     descriptor = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as backup_file:
@@ -535,8 +608,13 @@ def create_backup(year: int, month: int, rows: dict[date, dict], targets: list[d
     return backup_path
 
 
-def attendance_payload(target: date, intervals: list[tuple[str, str]], project_id, offset: int,
-                       break_intervals: list[tuple[str, str]] | None = None) -> list[dict]:
+def attendance_payload(
+    target: date,
+    intervals: list[tuple[str, str]],
+    project_id,
+    offset: int,
+    break_intervals: list[tuple[str, str]] | None = None,
+) -> list[dict]:
     payload = [
         {
             "start": f"{target.isoformat()}T{start}",
@@ -568,12 +646,18 @@ def date_offset(target: date) -> int:
     local_midnight = datetime(target.year, target.month, target.day, tzinfo=TIMEZONE)
     utc_offset = local_midnight.utcoffset()
     if utc_offset is None:
-        raise RuntimeError(f"Could not determine timezone offset for {target.isoformat()}.")
+        raise RuntimeError(
+            f"Could not determine timezone offset for {target.isoformat()}."
+        )
     return -int(utc_offset.total_seconds() // 60)
 
 
-def matches_intervals(row: dict | None, intervals: list[tuple[str, str]], project_id,
-                      break_intervals: list[tuple[str, str]] | None = None) -> bool:
+def matches_intervals(
+    row: dict | None,
+    intervals: list[tuple[str, str]],
+    project_id,
+    break_intervals: list[tuple[str, str]] | None = None,
+) -> bool:
     if not row or not isinstance(row.get("entries"), list):
         return False
     actual = []
@@ -602,10 +686,17 @@ def matches_intervals(row: dict | None, intervals: list[tuple[str, str]], projec
     return actual == intervals and actual_breaks == (break_intervals or [])
 
 
-def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
-               intervals: list[tuple[str, str]], requested_project_id: str,
-               overwrite: bool = False,
-               break_intervals: list[tuple[str, str]] | None = None) -> dict[date, dict]:
+def fill_month(
+    opener,
+    request_headers,
+    employee_id: str,
+    year: int,
+    month: int,
+    intervals: list[tuple[str, str]],
+    requested_project_id: str,
+    overwrite: bool = False,
+    break_intervals: list[tuple[str, str]] | None = None,
+) -> dict[date, dict]:
     cycles = report_cycles(opener, request_headers, employee_id, year, month)
     rows = month_rows(opener, request_headers, employee_id, year, month)
     projects = fetch_projects(opener, request_headers, employee_id)
@@ -622,14 +713,23 @@ def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
     if overwrite:
         # Existing entries anywhere in the selected month are replaced. Pending
         # workdays through yesterday are filled as well, matching normal fill.
-        month_days = [date(year, month, number) for number in range(1, calendar.monthrange(year, month)[1] + 1)]
-        targets = [day for day in month_days if day_status(day, rows.get(day))[0] == "FILLED"]
+        month_days = [
+            date(year, month, number)
+            for number in range(1, calendar.monthrange(year, month)[1] + 1)
+        ]
+        targets = [
+            day for day in month_days if day_status(day, rows.get(day))[0] == "FILLED"
+        ]
         targets.extend(pending)
         targets = sorted(set(targets))
     else:
         targets = pending
     if not targets:
-        message = "attendance entries to overwrite" if overwrite else "pending attendance days through yesterday"
+        message = (
+            "attendance entries to overwrite"
+            if overwrite
+            else "pending attendance days through yesterday"
+        )
         print(f"No {message} for {project_name}; no entries written.")
         return rows
 
@@ -661,7 +761,9 @@ def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
             continue
 
         offset = date_offset(target)
-        payload = attendance_payload(target, intervals, project_id, offset, break_intervals)
+        payload = attendance_payload(
+            target, intervals, project_id, offset, break_intervals
+        )
         request_json(
             opener,
             request_headers,
@@ -669,17 +771,22 @@ def fill_month(opener, request_headers, employee_id: str, year: int, month: int,
             body=payload,
         )
         rows = month_rows(opener, request_headers, employee_id, year, month)
-        if not matches_intervals(rows.get(target), intervals, project_id, break_intervals):
+        if not matches_intervals(
+            rows.get(target), intervals, project_id, break_intervals
+        ):
             raise RuntimeError(
                 f"HiBob did not verify the requested work/break intervals and project for "
                 f"{target.isoformat()}; stopped before writing additional dates."
             )
         break_summary = (
             f"; breaks {', '.join(f'{start}-{end}' for start, end in break_intervals)}"
-            if break_intervals else ""
+            if break_intervals
+            else ""
         )
-        print(f"Filled and verified {target.isoformat()} on {project_name} "
-              f"({', '.join(f'{start}-{end}' for start, end in intervals)}{break_summary}).")
+        print(
+            f"Filled and verified {target.isoformat()} on {project_name} "
+            f"({', '.join(f'{start}-{end}' for start, end in intervals)}{break_summary})."
+        )
     return rows
 
 
@@ -696,7 +803,10 @@ def main() -> int:
             render_projects(projects)
         elif args.action == "fill-time-attendance":
             default_year, default_number = default_month(today)
-            year, month = default_year, args.month if args.month is not None else default_number
+            year, month = (
+                default_year,
+                args.month if args.month is not None else default_number,
+            )
             rows = fill_month(
                 opener,
                 request_headers,
@@ -711,7 +821,10 @@ def main() -> int:
             render_table(rows, year, month)
         else:
             default_year, default_number = default_month(today)
-            year, month = default_year, args.month if args.month is not None else default_number
+            year, month = (
+                default_year,
+                args.month if args.month is not None else default_number,
+            )
             rows = month_rows(opener, request_headers, employee_id, year, month)
             render_table(rows, year, month)
     except InputError as exc:
