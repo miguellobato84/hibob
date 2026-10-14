@@ -14,7 +14,7 @@
 Create the project environment and install development tools:
 
 ```sh
-uv sync --group dev
+uv sync --locked --group dev
 ```
 
 Run the CLI with the project Python environment:
@@ -26,11 +26,28 @@ uv run python hibob.py
 Run Ruff on the script:
 
 ```sh
-uv run ruff check hibob.py
+uv run --locked --group dev ruff check hibob.py
 ```
 
 The project uses Python's standard library at runtime. `uv.lock` records the
 development tool versions for repeatable local setup.
+
+## Testing
+
+Run the unit tests with:
+
+```sh
+uv run --locked --group dev python -m unittest discover -s tests -v
+```
+
+Tests use synthetic session data and mocked network calls, so they need no
+`curl.secret` or live HiBob credentials.
+
+Check Python formatting with:
+
+```sh
+uv run --locked --group dev ruff format --check
+```
 
 Save the cURL command as `curl.secret` in this repository's root and restrict access to your account:
 
