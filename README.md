@@ -16,6 +16,19 @@ chmod 600 curl.secret
 
 The script reads the cURL URL, headers, and cookies to authenticate its own requests. It does not replay the copied request or print its credentials. The session must still be valid on HiBob's servers; an unexpired token alone is not enough.
 
+## Get the session
+
+1. Sign in to HiBob in Chrome and open the Attendance page.
+2. Open Chrome DevTools (`⌘`+`Option`+`I` on macOS, or `Ctrl`+`Shift`+`I` on Windows/Linux) and select **Network**. DevTools records requests while this panel is open, so reload the Attendance page if needed.
+3. Select the **Fetch/XHR** filter and find a successful Attendance request. Right-click its row and choose **Copy** → **Copy as cURL**.
+4. Create or open `curl.secret` in the repository root, paste the copied command as-is, and save the file. Restrict access to your account:
+
+   ```sh
+   chmod 600 curl.secret
+   ```
+
+The copied command contains session credentials, such as cookies or authorization headers. Treat `curl.secret` like a password; do not share or commit it. See the [Chrome DevTools Network reference](https://developer.chrome.com/docs/devtools/network/reference/) for the Network panel, request filters, and copy options.
+
 ## Commands
 
 Run these from the repository directory:
