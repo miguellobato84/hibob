@@ -45,6 +45,11 @@ REQUIRED_REPORT_FIELDS = (
 TIME_INTERVAL_PATTERN = re.compile(
     r"^\s*(\d{1,2})(?::([0-5]\d))?\s*-\s*(\d{1,2})(?::([0-5]\d))?\s*$"
 )
+WEEKDAY_GROUP_PATTERN = re.compile(
+    r"(?i)(Mon|Tue|Wed|Thu|Fri|Sat|Sun)(?:\s*-\s*(Mon|Tue|Wed|Thu|Fri|Sat|Sun))?\s+"
+)
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WORKDAYS = WEEKDAYS[:5]
 
 
 class InputError(ValueError):
@@ -297,11 +302,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--schedule",
-        help='work intervals, e.g. "08:00 - 14:00, 15:00 - 17:00" or "8-14,15-17"',
+        help='work intervals, e.g. "8-13,14-17:30" or weekday groups "Mon-Thu 8-13,14-17:30 Fri 8-14"',
     )
     parser.add_argument(
         "--break-schedule",
-        help='break intervals, e.g. "14:00 - 15:00" or "14-15"',
+        help='break intervals, e.g. "14-15" or weekday groups "Mon-Thu 13-14 Fri 12-12:30"',
     )
     parser.add_argument(
         "--project-id",
@@ -319,11 +324,13 @@ def parse_args() -> argparse.Namespace:
         if args.project_id is None:
             parser.error("--project-id is required with --action fill-time-attendance")
         try:
-            args.intervals = parse_intervals(args.schedule)
-            args.break_intervals = (
-                parse_intervals(args.break_schedule, "--break-schedule")
+            args.interval_schedule = parse_weekday_schedule(args.schedule)
+            args.break_schedule_by_weekday = (
+                parse_weekday_schedule(
+                    args.break_schedule, "--break-schedule", require_workdays=False
+                )
                 if args.break_schedule is not None
-                else []
+                else {weekday: [] for weekday in WEEKDAYS}
             )
         except InputError as exc:
             parser.error(str(exc))
@@ -379,6 +386,54 @@ def parse_intervals(
         if current[0] < previous[1]:
             raise InputError("Intervals must not overlap.")
     return [(start, end) for _start, _end, start, end in intervals]
+
+
+def parse_weekday_schedule(
+    value: str,
+    option_name: str = "--schedule",
+    *,
+    require_workdays: bool = True,
+) -> dict[str, list[tuple[str, str]]]:
+    """Parse a plain schedule or weekday groups into a weekday-to-interval map."""
+    matches = list(WEEKDAY_GROUP_PATTERN.finditer(value))
+    if not matches:
+        intervals = parse_intervals(value, option_name)
+        return {weekday: intervals for weekday in WEEKDAYS}
+
+    # Weekday groups must cover the whole value; otherwise a typo or stray
+    # interval could silently be ignored.
+    if value[: matches[0].start()].strip():
+        raise InputError(f"Expected a weekday group at the start of {option_name}.")
+
+    schedules: dict[str, list[tuple[str, str]]] = {}
+    for index, match in enumerate(matches):
+        start = WEEKDAYS.index(match.group(1).title()[:3])
+        end = WEEKDAYS.index((match.group(2) or match.group(1)).title()[:3])
+        if end < start:
+            raise InputError(
+                f"Weekday ranges in {option_name} must run Monday through Sunday."
+            )
+        following = (
+            matches[index + 1].start() if index + 1 < len(matches) else len(value)
+        )
+        schedule_text = value[match.end() : following].strip()
+        if not schedule_text:
+            raise InputError(f"Missing intervals for a weekday group in {option_name}.")
+        intervals = parse_intervals(schedule_text, option_name)
+        for weekday in WEEKDAYS[start : end + 1]:
+            if weekday in schedules:
+                raise InputError(
+                    f"{weekday} is specified more than once in {option_name}."
+                )
+            schedules[weekday] = intervals
+
+    if require_workdays:
+        missing = [weekday for weekday in WORKDAYS if weekday not in schedules]
+        if missing:
+            raise InputError(
+                f"{option_name} must specify every workday; missing {', '.join(missing)}."
+            )
+    return {weekday: schedules.get(weekday, []) for weekday in WEEKDAYS}
 
 
 def report_cycles(
@@ -686,16 +741,25 @@ def matches_intervals(
     return actual == intervals and actual_breaks == (break_intervals or [])
 
 
+def intervals_for_day(schedule, target: date) -> list[tuple[str, str]]:
+    """Return intervals for a date, accepting legacy uniform interval lists."""
+    if isinstance(schedule, dict):
+        return schedule.get(WEEKDAYS[target.weekday()], [])
+    return schedule
+
+
 def fill_month(
     opener,
     request_headers,
     employee_id: str,
     year: int,
     month: int,
-    intervals: list[tuple[str, str]],
+    intervals: list[tuple[str, str]] | dict[str, list[tuple[str, str]]],
     requested_project_id: str,
     overwrite: bool = False,
-    break_intervals: list[tuple[str, str]] | None = None,
+    break_intervals: list[tuple[str, str]]
+    | dict[str, list[tuple[str, str]]]
+    | None = None,
 ) -> dict[date, dict]:
     cycles = report_cycles(opener, request_headers, employee_id, year, month)
     rows = month_rows(opener, request_headers, employee_id, year, month)
@@ -718,7 +782,9 @@ def fill_month(
             for number in range(1, calendar.monthrange(year, month)[1] + 1)
         ]
         targets = [
-            day for day in month_days if day_status(day, rows.get(day))[0] == "FILLED"
+            day
+            for day in month_days
+            if day.weekday() < 5 and day_status(day, rows.get(day))[0] == "FILLED"
         ]
         targets.extend(pending)
         targets = sorted(set(targets))
@@ -735,6 +801,18 @@ def fill_month(
 
     # Validate every target before the first write to avoid a partial fill when
     # the selected timesheet is locked or its state is unknown.
+    missing_workdays = [
+        day
+        for day in targets
+        if isinstance(intervals, dict) and not intervals_for_day(intervals, day)
+    ]
+    if missing_workdays:
+        weekdays = ", ".join(
+            sorted({WEEKDAYS[day.weekday()] for day in missing_workdays})
+        )
+        raise InputError(
+            f"--schedule has no work intervals for target weekday(s): {weekdays}."
+        )
     target_cycles = {day: cycle_for_date(cycles, day) for day in targets}
     for day, cycle in target_cycles.items():
         ensure_cycle_editable(cycle, day)
@@ -761,8 +839,10 @@ def fill_month(
             continue
 
         offset = date_offset(target)
+        day_intervals = intervals_for_day(intervals, target)
+        day_break_intervals = intervals_for_day(break_intervals or [], target)
         payload = attendance_payload(
-            target, intervals, project_id, offset, break_intervals
+            target, day_intervals, project_id, offset, day_break_intervals
         )
         request_json(
             opener,
@@ -772,20 +852,20 @@ def fill_month(
         )
         rows = month_rows(opener, request_headers, employee_id, year, month)
         if not matches_intervals(
-            rows.get(target), intervals, project_id, break_intervals
+            rows.get(target), day_intervals, project_id, day_break_intervals
         ):
             raise RuntimeError(
                 f"HiBob did not verify the requested work/break intervals and project for "
                 f"{target.isoformat()}; stopped before writing additional dates."
             )
         break_summary = (
-            f"; breaks {', '.join(f'{start}-{end}' for start, end in break_intervals)}"
-            if break_intervals
+            f"; breaks {', '.join(f'{start}-{end}' for start, end in day_break_intervals)}"
+            if day_break_intervals
             else ""
         )
         print(
             f"Filled and verified {target.isoformat()} on {project_name} "
-            f"({', '.join(f'{start}-{end}' for start, end in intervals)}{break_summary})."
+            f"({', '.join(f'{start}-{end}' for start, end in day_intervals)}{break_summary})."
         )
     return rows
 
@@ -813,10 +893,10 @@ def main() -> int:
                 employee_id,
                 year,
                 month,
-                args.intervals,
+                args.interval_schedule,
                 args.project_id,
                 args.overwrite,
-                args.break_intervals,
+                args.break_schedule_by_weekday,
             )
             render_table(rows, year, month)
         else:
