@@ -63,6 +63,33 @@ class ScheduleTests(unittest.TestCase):
         with self.assertRaisesRegex(hibob.InputError, "end after it starts"):
             hibob.parse_intervals("22-6")
 
+    def test_parses_weekday_groups_and_uniform_schedule(self):
+        schedule = hibob.parse_weekday_schedule("Mon-Thu 8-13,14-17:30 Fri 8-14")
+
+        self.assertEqual(schedule["Mon"], [("08:00", "13:00"), ("14:00", "17:30")])
+        self.assertEqual(schedule["Thu"], schedule["Mon"])
+        self.assertEqual(schedule["Fri"], [("08:00", "14:00")])
+        self.assertEqual(schedule["Sat"], [])
+        self.assertEqual(
+            hibob.parse_weekday_schedule("8-14")["Fri"], [("08:00", "14:00")]
+        )
+
+    def test_weekday_schedule_requires_all_workdays_and_rejects_duplicates(self):
+        with self.assertRaisesRegex(hibob.InputError, "missing Tue, Wed, Thu, Fri"):
+            hibob.parse_weekday_schedule("Mon 8-14")
+        with self.assertRaisesRegex(
+            hibob.InputError, "Fri is specified more than once"
+        ):
+            hibob.parse_weekday_schedule("Mon-Fri 8-14 Fri 8-12")
+
+    def test_grouped_break_schedule_allows_omitted_weekdays(self):
+        schedule = hibob.parse_weekday_schedule(
+            "Fri 12-12:30", "--break-schedule", require_workdays=False
+        )
+
+        self.assertEqual(schedule["Mon"], [])
+        self.assertEqual(schedule["Fri"], [("12:00", "12:30")])
+
 
 class DateAndPayloadTests(unittest.TestCase):
     def test_default_month_uses_previous_month_on_first_five_days(self):
@@ -177,7 +204,7 @@ class FillTargetTests(unittest.TestCase):
     def selected_targets(self, overwrite):
         rows = {
             date(2025, 7, 11): {},  # pending Friday
-            date(2025, 7, 12): {},  # weekend
+            date(2025, 7, 12): {"entries": [{"entryType": "work"}]},  # filled weekend
             date(2025, 7, 14): {},  # pending Monday, yesterday
             date(2025, 7, 15): {},  # today
             date(2025, 7, 16): {},  # future pending day
