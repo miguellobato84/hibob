@@ -29,7 +29,10 @@ The project uses Python's standard library at runtime. `uv.lock` records the dev
 
 1. Sign in to HiBob in Chrome and open the Attendance page.
 2. Open Chrome DevTools (`⌘`+`Option`+`I` on macOS, or `Ctrl`+`Shift`+`I` on Windows/Linux) and select **Network**. DevTools records requests while this panel is open, so reload the Attendance page if needed.
-3. Select the **Fetch/XHR** filter and find a successful Attendance request. Right-click its row and choose **Copy** → **Copy as cURL**.
+3. Select the **Fetch/XHR** filter and find a successful Attendance request. Right-click its row and choose **Copy** → **Copy as cURL**, as shown here:
+
+   ![Chrome DevTools menu for copying a request as cURL](docs/images/copy-request-as-curl.png)
+
 4. Create or open `curl.secret` in the repository root, paste the copied command as-is, and save the file. Restrict access to your account:
 
    ```sh
@@ -81,6 +84,9 @@ uv run python hibob.py --action fill-time-attendance --month 10 --project-id PRO
 
 # Use shorter Fridays and a different Friday break
 uv run python hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "Mon-Thu 8-13,14-17:30 Fri 8-14" --break-schedule "Mon-Thu 13-14 Fri 12-12:30"
+
+# Preview the per-day hours summary in the terminal
+uv run python hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "8-12,13-17" --dry-run
 ```
 
 `--schedule` takes comma-separated 24-hour work intervals. Enter each as `HH:MM - HH:MM` or as `H-H` with omitted minutes treated as `:00`. For example, `08:00 - 14:00, 15:00 - 17:00` and `8-14,15-17` mean the same thing. To vary hours by weekday, prefix each group with a day or inclusive weekday range, such as `Mon-Thu 8-13,14-17:30 Fri 8-14`. Weekday names are case-insensitive three-letter English names. Grouped work schedules must specify every weekday from Monday through Friday; Saturday and Sunday are skipped. The plain interval form remains a schedule applied to every day. `--break-schedule` accepts the same formats; in a grouped break schedule, omitted days have no break intervals. Each interval must end after it starts, intervals within a schedule cannot overlap, and overnight intervals are not supported.
@@ -95,6 +101,8 @@ The fill action:
 - Saves a private backup under the ignored `backups/` directory, rereads each date before updating it, and reads attendance back to verify the intervals and project.
 
 This action writes attendance to HiBob. In default mode, if a request fails partway through, rerunning it skips dates that are already filled.
+
+`--dry-run` uses the same project, schedule, status, and date selection as the fill action, but does not change attendance or create a backup. It requires `--project-id`, which you can look up with `uv run python hibob.py --action show-projects` (see [List attendance projects](#list-attendance-projects)). It prints a per-day summary of included dates, work intervals, break intervals, and hours. Work hours exclude breaks, which are totaled separately. With `--overwrite`, the preview includes filled weekdays throughout the selected month plus pending weekdays through yesterday, matching the overwrite action.
 
 `--overwrite` is restricted to `--action fill-time-attendance`. It replaces each target weekday's full entry list with the requested schedule and project. Existing entries later in the selected month are included; pending dates are still filled only through yesterday. Weekends are skipped. A backup of every target day's prior row is saved before writing.
 

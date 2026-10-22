@@ -317,6 +317,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="replace existing attendance entries throughout the selected month",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="preview fill targets and print a daily hours summary without writing attendance",
+    )
     args = parser.parse_args()
     if args.action == "fill-time-attendance":
         if args.schedule is None:
@@ -339,9 +344,10 @@ def parse_args() -> argparse.Namespace:
         or args.break_schedule is not None
         or args.project_id is not None
         or args.overwrite
+        or args.dry_run
     ):
         parser.error(
-            "--schedule, --break-schedule, --project-id, and --overwrite can only be used with --action fill-time-attendance"
+            "--schedule, --break-schedule, --project-id, --overwrite, and --dry-run can only be used with --action fill-time-attendance"
         )
     return args
 
@@ -748,6 +754,138 @@ def intervals_for_day(schedule, target: date) -> list[tuple[str, str]]:
     return schedule
 
 
+def fill_targets(
+    rows: dict[date, dict],
+    year: int,
+    month: int,
+    today: date,
+    overwrite: bool,
+) -> list[date]:
+    """Select the dates fill_month would update for the given attendance rows."""
+    month_days = [
+        date(year, month, number)
+        for number in range(1, calendar.monthrange(year, month)[1] + 1)
+    ]
+    through_yesterday = [day for day in month_days if day <= today - timedelta(days=1)]
+    pending = [
+        day
+        for day in through_yesterday
+        if day_status(day, rows.get(day))[0] == "PENDING"
+    ]
+    if not overwrite:
+        return pending
+    targets = [
+        day
+        for day in month_days
+        if day.weekday() < 5 and day_status(day, rows.get(day))[0] == "FILLED"
+    ]
+    return sorted(set(targets).union(pending))
+
+
+def interval_hours(intervals: list[tuple[str, str]]) -> str:
+    minutes = sum(
+        (int(end[:2]) * 60 + int(end[3:])) - (int(start[:2]) * 60 + int(start[3:]))
+        for start, end in intervals
+    )
+    return f"{minutes / 60:.2f}"
+
+
+def render_dry_run(
+    targets: list[date],
+    year: int,
+    month: int,
+    intervals,
+    break_intervals,
+    project_name: str,
+    project_id,
+) -> None:
+    print(
+        f"Dry run — {calendar.month_name[month]} {year}: "
+        f"{len(targets)} day(s) included for {project_name} (ID: {project_id})"
+    )
+    if not targets:
+        print("No attendance days would be included.")
+        return
+
+    columns = (
+        "Date",
+        "Day",
+        "Work intervals",
+        "Break intervals",
+        "Work hours",
+        "Break hours",
+    )
+    records = []
+    for target in targets:
+        work = intervals_for_day(intervals, target)
+        breaks = intervals_for_day(break_intervals, target)
+        records.append(
+            (
+                target.isoformat(),
+                target.strftime("%A"),
+                ", ".join(f"{start}-{end}" for start, end in work),
+                ", ".join(f"{start}-{end}" for start, end in breaks) or "—",
+                interval_hours(work),
+                interval_hours(breaks),
+            )
+        )
+    widths = [
+        max(len(columns[index]), *(len(record[index]) for record in records))
+        for index in range(len(columns))
+    ]
+    print(
+        " | ".join(columns[index].ljust(widths[index]) for index in range(len(columns)))
+    )
+    print("-+-".join("-" * width for width in widths))
+    for record in records:
+        print(
+            " | ".join(
+                record[index].ljust(widths[index]) for index in range(len(columns))
+            )
+        )
+
+
+def preview_month(
+    opener,
+    request_headers,
+    employee_id: str,
+    year: int,
+    month: int,
+    intervals,
+    requested_project_id: str,
+    overwrite: bool,
+    break_intervals,
+) -> None:
+    rows = month_rows(opener, request_headers, employee_id, year, month)
+    project = find_project(
+        fetch_projects(opener, request_headers, employee_id), requested_project_id
+    )
+    project_id = project["id"]
+    project_name = str(project.get("name") or "(unnamed)")
+    targets = fill_targets(rows, year, month, datetime.now(TIMEZONE).date(), overwrite)
+    missing_workdays = [
+        day
+        for day in targets
+        if isinstance(intervals, dict) and not intervals_for_day(intervals, day)
+    ]
+    if missing_workdays:
+        weekdays = ", ".join(
+            sorted({WEEKDAYS[day.weekday()] for day in missing_workdays})
+        )
+        raise InputError(
+            f"--schedule has no work intervals for target weekday(s): {weekdays}."
+        )
+    render_dry_run(
+        targets,
+        year,
+        month,
+        intervals,
+        break_intervals,
+        project_name,
+        project_id,
+    )
+
+
 def fill_month(
     opener,
     request_headers,
@@ -767,29 +905,7 @@ def fill_month(
     project = find_project(projects, requested_project_id)
     project_id = project["id"]
     project_name = str(project.get("name") or "(unnamed)")
-    yesterday = datetime.now(TIMEZONE).date() - timedelta(days=1)
-    days = [
-        date(year, month, number)
-        for number in range(1, calendar.monthrange(year, month)[1] + 1)
-        if date(year, month, number) <= yesterday
-    ]
-    pending = [day for day in days if day_status(day, rows.get(day))[0] == "PENDING"]
-    if overwrite:
-        # Existing entries anywhere in the selected month are replaced. Pending
-        # workdays through yesterday are filled as well, matching normal fill.
-        month_days = [
-            date(year, month, number)
-            for number in range(1, calendar.monthrange(year, month)[1] + 1)
-        ]
-        targets = [
-            day
-            for day in month_days
-            if day.weekday() < 5 and day_status(day, rows.get(day))[0] == "FILLED"
-        ]
-        targets.extend(pending)
-        targets = sorted(set(targets))
-    else:
-        targets = pending
+    targets = fill_targets(rows, year, month, datetime.now(TIMEZONE).date(), overwrite)
     if not targets:
         message = (
             "attendance entries to overwrite"
@@ -887,18 +1003,31 @@ def main() -> int:
                 default_year,
                 args.month if args.month is not None else default_number,
             )
-            rows = fill_month(
-                opener,
-                request_headers,
-                employee_id,
-                year,
-                month,
-                args.interval_schedule,
-                args.project_id,
-                args.overwrite,
-                args.break_schedule_by_weekday,
-            )
-            render_table(rows, year, month)
+            if args.dry_run:
+                preview_month(
+                    opener,
+                    request_headers,
+                    employee_id,
+                    year,
+                    month,
+                    args.interval_schedule,
+                    args.project_id,
+                    args.overwrite,
+                    args.break_schedule_by_weekday,
+                )
+            else:
+                rows = fill_month(
+                    opener,
+                    request_headers,
+                    employee_id,
+                    year,
+                    month,
+                    args.interval_schedule,
+                    args.project_id,
+                    args.overwrite,
+                    args.break_schedule_by_weekday,
+                )
+                render_table(rows, year, month)
         else:
             default_year, default_number = default_month(today)
             year, month = (
