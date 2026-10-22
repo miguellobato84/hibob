@@ -308,9 +308,13 @@ def parse_args() -> argparse.Namespace:
         "--break-schedule",
         help='break intervals, e.g. "14-15" or weekday groups "Mon-Thu 13-14 Fri 12-12:30"',
     )
-    parser.add_argument(
-        "--project-id",
-        help="attendance project ID (required when filling attendance)",
+    project_selector = parser.add_mutually_exclusive_group()
+    project_selector.add_argument(
+        "--project-id", help="attendance project ID to use when filling attendance"
+    )
+    project_selector.add_argument(
+        "--project-alias",
+        help="attendance project name (case-insensitive exact match)",
     )
     parser.add_argument(
         "--overwrite",
@@ -326,8 +330,10 @@ def parse_args() -> argparse.Namespace:
     if args.action == "fill-time-attendance":
         if args.schedule is None:
             parser.error("--schedule is required with --action fill-time-attendance")
-        if args.project_id is None:
-            parser.error("--project-id is required with --action fill-time-attendance")
+        if args.project_id is None and args.project_alias is None:
+            parser.error(
+                "either --project-id or --project-alias is required with --action fill-time-attendance"
+            )
         try:
             args.interval_schedule = parse_weekday_schedule(args.schedule)
             args.break_schedule_by_weekday = (
@@ -343,11 +349,12 @@ def parse_args() -> argparse.Namespace:
         args.schedule is not None
         or args.break_schedule is not None
         or args.project_id is not None
+        or args.project_alias is not None
         or args.overwrite
         or args.dry_run
     ):
         parser.error(
-            "--schedule, --break-schedule, --project-id, --overwrite, and --dry-run can only be used with --action fill-time-attendance"
+            "--schedule, --break-schedule, --project-id, --project-alias, --overwrite, --dry-run can only be used with --action fill-time-attendance"
         )
     return args
 
@@ -625,6 +632,42 @@ def find_project(projects: list[dict], project_id: str) -> dict:
     raise RuntimeError(f"Project ID {project_id!r} is not available for this employee.")
 
 
+def resolve_project(
+    projects: list[dict],
+    project_id: str | None = None,
+    project_alias: str | None = None,
+) -> dict:
+    """Resolve a project ID or exact, case-insensitive project-name alias."""
+    if project_id is not None and project_alias is not None:
+        raise InputError("Use only one of --project-id or --project-alias.")
+    if project_id is not None:
+        return find_project(projects, project_id)
+    if project_alias is None:
+        raise InputError("Either --project-id or --project-alias is required.")
+
+    normalized_alias = project_alias.strip().casefold()
+    if not normalized_alias:
+        raise InputError("--project-alias must contain a project name.")
+    matches = [
+        project
+        for project in projects
+        if str(project.get("name") or "").strip().casefold() == normalized_alias
+    ]
+    if not matches:
+        raise RuntimeError(
+            f"Project alias {project_alias!r} is not available for this employee."
+        )
+    if len(matches) > 1:
+        project_ids = ", ".join(
+            str(project.get("id", "unknown")) for project in matches
+        )
+        raise RuntimeError(
+            f"Project alias {project_alias!r} matches multiple projects; "
+            f"use --project-id to disambiguate (IDs: {project_ids})."
+        )
+    return matches[0]
+
+
 def cycle_for_date(cycles: list[dict], target: date) -> dict:
     for cycle in cycles:
         try:
@@ -852,16 +895,19 @@ def preview_month(
     year: int,
     month: int,
     intervals,
-    requested_project_id: str,
+    requested_project_id: str | None,
     overwrite: bool,
     break_intervals,
+    requested_project_alias: str | None = None,
 ) -> None:
-    rows = month_rows(opener, request_headers, employee_id, year, month)
-    project = find_project(
-        fetch_projects(opener, request_headers, employee_id), requested_project_id
+    project = resolve_project(
+        fetch_projects(opener, request_headers, employee_id),
+        requested_project_id,
+        requested_project_alias,
     )
     project_id = project["id"]
     project_name = str(project.get("name") or "(unnamed)")
+    rows = month_rows(opener, request_headers, employee_id, year, month)
     targets = fill_targets(rows, year, month, datetime.now(TIMEZONE).date(), overwrite)
     missing_workdays = [
         day
@@ -893,18 +939,19 @@ def fill_month(
     year: int,
     month: int,
     intervals: list[tuple[str, str]] | dict[str, list[tuple[str, str]]],
-    requested_project_id: str,
+    requested_project_id: str | None,
     overwrite: bool = False,
     break_intervals: list[tuple[str, str]]
     | dict[str, list[tuple[str, str]]]
     | None = None,
+    requested_project_alias: str | None = None,
 ) -> dict[date, dict]:
-    cycles = report_cycles(opener, request_headers, employee_id, year, month)
-    rows = month_rows(opener, request_headers, employee_id, year, month)
     projects = fetch_projects(opener, request_headers, employee_id)
-    project = find_project(projects, requested_project_id)
+    project = resolve_project(projects, requested_project_id, requested_project_alias)
     project_id = project["id"]
     project_name = str(project.get("name") or "(unnamed)")
+    cycles = report_cycles(opener, request_headers, employee_id, year, month)
+    rows = month_rows(opener, request_headers, employee_id, year, month)
     targets = fill_targets(rows, year, month, datetime.now(TIMEZONE).date(), overwrite)
     if not targets:
         message = (
@@ -1014,6 +1061,7 @@ def main() -> int:
                     args.project_id,
                     args.overwrite,
                     args.break_schedule_by_weekday,
+                    args.project_alias,
                 )
             else:
                 rows = fill_month(
@@ -1026,6 +1074,7 @@ def main() -> int:
                     args.project_id,
                     args.overwrite,
                     args.break_schedule_by_weekday,
+                    args.project_alias,
                 )
                 render_table(rows, year, month)
         else:
