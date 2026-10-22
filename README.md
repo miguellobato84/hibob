@@ -94,6 +94,9 @@ uv run python hibob.py --action fill-time-attendance --project-id PROJECT_ID --s
 
 # Preview using a project name
 uv run python hibob.py --action fill-time-attendance --project-alias "Project Name" --schedule "8-12,13-17" --dry-run
+
+# Randomize each day's start and end while preserving interval durations
+uv run python hibob.py --action fill-time-attendance --project-id PROJECT_ID --schedule "8-13" --randomize --dry-run
 ```
 
 `--schedule` takes comma-separated 24-hour work intervals. Enter each as `HH:MM - HH:MM` or as `H-H` with omitted minutes treated as `:00`. For example, `08:00 - 14:00, 15:00 - 17:00` and `8-14,15-17` mean the same thing. To vary hours by weekday, prefix each group with a day or inclusive weekday range, such as `Mon-Thu 8-13,14-17:30 Fri 8-14`. Weekday names are case-insensitive three-letter English names. Grouped work schedules must specify every weekday from Monday through Friday; Saturday and Sunday are skipped. The plain interval form remains a schedule applied to every day. `--break-schedule` accepts the same formats; in a grouped break schedule, omitted days have no break intervals. Each interval must end after it starts, intervals within a schedule cannot overlap, and overnight intervals are not supported.
@@ -106,10 +109,13 @@ The fill action:
 - In default mode, skips dates already filled, weekends, holidays, time off, dates without a report row, today, and future dates.
 - Checks that the timesheet is open before writing.
 - Saves a private backup under the ignored `backups/` directory, rereads each date before updating it, and reads attendance back to verify the intervals and project.
+- Accepts `--randomize` to shift each target day's work and break intervals together by a random amount from 1 to 10 minutes earlier or later. The same shift is applied to every interval that day, preserving the work and break durations and their spacing.
 
 This action writes attendance to HiBob. In default mode, if a request fails partway through, rerunning it skips dates that are already filled.
 
 `--dry-run` uses the same project, schedule, status, and date selection as the fill action, but does not change attendance or create a backup. It requires exactly one of `--project-id` or `--project-alias`. It prints a per-day summary of included dates, work intervals, break intervals, and hours. Work hours exclude breaks, which are totaled separately. With `--overwrite`, the preview includes filled weekdays throughout the selected month plus pending weekdays through yesterday, matching the overwrite action.
+
+`--randomize` works with dry-run and fill. Its per-day shifts are reproducible for the same employee, project, month, and schedule, so the dry-run preview matches the values a fill will submit. For example, a daily `8-13` interval can shift to `07:58-12:58` on one date and `08:05-13:05` on another; each remains five hours long.
 
 `--overwrite` is restricted to `--action fill-time-attendance`. It replaces each target weekday's full entry list with the requested schedule and project. Existing entries later in the selected month are included; pending dates are still filled only through yesterday. Weekends are skipped. A backup of every target day's prior row is saved before writing.
 
