@@ -13,6 +13,7 @@ import base64
 import calendar
 import json
 import os
+import random
 import re
 import shlex
 import stat
@@ -326,6 +327,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="preview fill targets and print a daily hours summary without writing attendance",
     )
+    parser.add_argument(
+        "--randomize",
+        action="store_true",
+        help="shift each day's work and break intervals by a reproducible random ±1–10 minutes",
+    )
     args = parser.parse_args()
     if args.action == "fill-time-attendance":
         if args.schedule is None:
@@ -352,9 +358,10 @@ def parse_args() -> argparse.Namespace:
         or args.project_alias is not None
         or args.overwrite
         or args.dry_run
+        or args.randomize
     ):
         parser.error(
-            "--schedule, --break-schedule, --project-id, --project-alias, --overwrite, --dry-run can only be used with --action fill-time-attendance"
+            "--schedule, --break-schedule, --project-id, --project-alias, --overwrite, --dry-run, and --randomize can only be used with --action fill-time-attendance"
         )
     return args
 
@@ -793,8 +800,76 @@ def matches_intervals(
 def intervals_for_day(schedule, target: date) -> list[tuple[str, str]]:
     """Return intervals for a date, accepting legacy uniform interval lists."""
     if isinstance(schedule, dict):
-        return schedule.get(WEEKDAYS[target.weekday()], [])
+        return schedule.get(target, schedule.get(WEEKDAYS[target.weekday()], []))
     return schedule
+
+
+def schedule_seed(
+    employee_id: str,
+    project_id,
+    year: int,
+    month: int,
+    intervals,
+    break_intervals,
+) -> str:
+    return json.dumps(
+        {
+            "employee": employee_id,
+            "project": str(project_id),
+            "month": f"{year:04d}-{month:02d}",
+            "work": intervals,
+            "breaks": break_intervals,
+        },
+        sort_keys=True,
+    )
+
+
+def shifted_intervals(
+    intervals: list[tuple[str, str]], offset_minutes: int
+) -> list[tuple[str, str]]:
+    shifted = []
+    for start, end in intervals:
+        start_minutes = int(start[:2]) * 60 + int(start[3:]) + offset_minutes
+        end_minutes = int(end[:2]) * 60 + int(end[3:]) + offset_minutes
+        shifted.append(
+            (
+                f"{start_minutes // 60:02d}:{start_minutes % 60:02d}",
+                f"{end_minutes // 60:02d}:{end_minutes % 60:02d}",
+            )
+        )
+    return shifted
+
+
+def randomize_schedules(
+    intervals,
+    break_intervals,
+    targets: list[date],
+    seed: str,
+) -> tuple[dict[date, list[tuple[str, str]]], dict[date, list[tuple[str, str]]]]:
+    """Shift each target day's work and breaks together by a reproducible ±1–10 minutes."""
+    randomized_work = {}
+    randomized_breaks = {}
+    for target in targets:
+        work = intervals_for_day(intervals, target)
+        breaks = intervals_for_day(break_intervals or [], target)
+        all_intervals = work + breaks
+        possible_offsets = [
+            offset
+            for offset in (*range(-10, 0), *range(1, 11))
+            if all(
+                0 <= int(start[:2]) * 60 + int(start[3:]) + offset
+                and int(end[:2]) * 60 + int(end[3:]) + offset < 24 * 60
+                for start, end in all_intervals
+            )
+        ]
+        if not possible_offsets:
+            raise InputError(
+                f"Cannot randomize the schedule for {target.isoformat()} without crossing midnight."
+            )
+        offset = random.Random(f"{seed}:{target.isoformat()}").choice(possible_offsets)
+        randomized_work[target] = shifted_intervals(work, offset)
+        randomized_breaks[target] = shifted_intervals(breaks, offset)
+    return randomized_work, randomized_breaks
 
 
 def fill_targets(
@@ -841,11 +916,16 @@ def render_dry_run(
     break_intervals,
     project_name: str,
     project_id,
+    randomized: bool = False,
 ) -> None:
     print(
         f"Dry run — {calendar.month_name[month]} {year}: "
         f"{len(targets)} day(s) included for {project_name} (ID: {project_id})"
     )
+    if randomized:
+        print(
+            "Randomization: each day's work and breaks are shifted together by ±1–10 minutes."
+        )
     if not targets:
         print("No attendance days would be included.")
         return
@@ -899,6 +979,7 @@ def preview_month(
     overwrite: bool,
     break_intervals,
     requested_project_alias: str | None = None,
+    randomize: bool = False,
 ) -> None:
     project = resolve_project(
         fetch_projects(opener, request_headers, employee_id),
@@ -921,6 +1002,18 @@ def preview_month(
         raise InputError(
             f"--schedule has no work intervals for target weekday(s): {weekdays}."
         )
+    if randomize:
+        seed = schedule_seed(
+            employee_id,
+            project_id,
+            year,
+            month,
+            intervals,
+            break_intervals,
+        )
+        intervals, break_intervals = randomize_schedules(
+            intervals, break_intervals, targets, seed
+        )
     render_dry_run(
         targets,
         year,
@@ -929,6 +1022,7 @@ def preview_month(
         break_intervals,
         project_name,
         project_id,
+        randomize,
     )
 
 
@@ -945,6 +1039,7 @@ def fill_month(
     | dict[str, list[tuple[str, str]]]
     | None = None,
     requested_project_alias: str | None = None,
+    randomize: bool = False,
 ) -> dict[date, dict]:
     projects = fetch_projects(opener, request_headers, employee_id)
     project = resolve_project(projects, requested_project_id, requested_project_alias)
@@ -975,6 +1070,18 @@ def fill_month(
         )
         raise InputError(
             f"--schedule has no work intervals for target weekday(s): {weekdays}."
+        )
+    if randomize:
+        seed = schedule_seed(
+            employee_id,
+            project_id,
+            year,
+            month,
+            intervals,
+            break_intervals,
+        )
+        intervals, break_intervals = randomize_schedules(
+            intervals, break_intervals or [], targets, seed
         )
     target_cycles = {day: cycle_for_date(cycles, day) for day in targets}
     for day, cycle in target_cycles.items():
@@ -1062,6 +1169,7 @@ def main() -> int:
                     args.overwrite,
                     args.break_schedule_by_weekday,
                     args.project_alias,
+                    args.randomize,
                 )
             else:
                 rows = fill_month(
@@ -1075,6 +1183,7 @@ def main() -> int:
                     args.overwrite,
                     args.break_schedule_by_weekday,
                     args.project_alias,
+                    args.randomize,
                 )
                 render_table(rows, year, month)
         else:
